@@ -196,7 +196,9 @@ class PDFPrinterApp:
             return ["Default Printer"]
 
         try:
-            levels = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL, None, 2)
+            flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+
+            levels = win32print.EnumPrinters(flags, None, 2)
             printers = []
             for printer_info in levels:
                 printer_name = printer_info["pPrinterName"]
