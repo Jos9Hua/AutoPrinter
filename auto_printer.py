@@ -199,7 +199,7 @@ class PDFPrinterApp:
             levels = win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL, None, 2)
             printers = []
             for printer_info in levels:
-                printer_name = printer_info[2]
+                printer_name = printer_info["pPrinterName"]
                 if printer_name:
                     printers.append(printer_name)
 
