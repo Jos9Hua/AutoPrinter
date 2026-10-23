@@ -195,20 +195,51 @@ class PDFPrinterApp:
         if win32print is None:
             return ["Default Printer"]
 
-        try:
-            flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+        printers = []
+        seen_printers = set()
 
-            levels = win32print.EnumPrinters(flags, None, 2)
-            printers = []
-            for printer_info in levels:
+        def log_printers(label, names):
+            self.log(f"{label}:")
+            if not names:
+                self.log("  (none found)")
+                return
+            for name in names:
+                self.log(f"  {name}")
+
+        try:
+            local_flags = (
+                win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+            )
+            local_entries = win32print.EnumPrinters(local_flags, None, 2)
+            local_printers = []
+            for printer_info in local_entries:
                 printer_name = printer_info["pPrinterName"]
                 if printer_name:
-                    printers.append(printer_name)
-
-            return printers if printers else ["Default Printer"]
+                    local_printers.append(printer_name)
+                    if printer_name not in seen_printers:
+                        printers.append(printer_name)
+                        seen_printers.add(printer_name)
+            log_printers("LOCAL / CONNECTIONS printers", local_printers)
         except Exception as exc:
-            self.log(f"Unable to list printers: {exc}")
-            return ["Default Printer"]
+            self.log(f"Unable to list LOCAL / CONNECTIONS printers: {exc}")
+
+        try:
+            network_entries = win32print.EnumPrinters(
+                win32print.PRINTER_ENUM_NETWORK, None, 1
+            )
+            network_printers = []
+            for printer_info in network_entries:
+                printer_name = printer_info[2]
+                if printer_name:
+                    network_printers.append(printer_name)
+                    if printer_name not in seen_printers:
+                        printers.append(printer_name)
+                        seen_printers.add(printer_name)
+            log_printers("NETWORK printers", network_printers)
+        except Exception as exc:
+            self.log(f"Unable to list NETWORK printers: {exc}")
+
+        return printers if printers else ["Default Printer"]
 
     def log(self, message):
         """Append messages to the log box."""
