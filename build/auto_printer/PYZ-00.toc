@@ -423,9 +423,6 @@
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\\Lib\\urllib\\parse.py',
    'PYMODULE'),
-  ('win32con',
-   'C:\\Users\\HJH17\\OneDrive\\桌面\\auto_printer\\.venv\\Lib\\site-packages\\win32\\lib\\win32con.py',
-   'PYMODULE'),
   ('zipfile',
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\\Lib\\zipfile.py',

@@ -1,14 +1,19 @@
 ﻿import os
 from pathlib import Path
+import shutil
+import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 try:
-    import win32con
     import win32print
 except ImportError:
-    win32con = None
     win32print = None
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 
 class PDFPrinterApp:
@@ -22,6 +27,7 @@ class PDFPrinterApp:
         self.printer_name = tk.StringVar()
         self.pdf_files = []
         self.file_settings = {}
+        self.bulk_duplex_target = "Double-sided"
         self.log_box = None
         self._pending_log_messages = []
 
@@ -66,10 +72,19 @@ class PDFPrinterApp:
         )
         btn_browse.pack(side="right")
 
+        list_header = tk.Frame(root)
+        list_header.pack(fill="x", padx=20)
         list_title = tk.Label(
-            root, text="PDF Files to Print", font=("Arial", 10, "bold")
+            list_header, text="PDF Files to Print", font=("Arial", 10, "bold")
         )
-        list_title.pack(anchor="w", padx=20)
+        list_title.pack(side="left")
+        self.btn_toggle_duplex = tk.Button(
+            list_header,
+            text="Set all double-sided",
+            command=self.toggle_all_duplex,
+            state="disabled",
+        )
+        self.btn_toggle_duplex.pack(side="right")
 
         self.list_frame = tk.Frame(root)
         self.list_frame.pack(padx=20, pady=(5, 10), fill="both", expand=True)
@@ -121,6 +136,56 @@ class PDFPrinterApp:
     def _resize_list_container(self, event):
         self.list_canvas.itemconfigure(self.list_window, width=event.width)
 
+    @staticmethod
+    def _find_sumatra_pdf():
+        executable = shutil.which("SumatraPDF.exe")
+        if executable:
+            return executable
+
+        program_files = [
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ]
+        for directory in program_files:
+            if directory:
+                candidate = Path(directory) / "SumatraPDF" / "SumatraPDF.exe"
+                if candidate.is_file():
+                    return str(candidate)
+
+        if winreg is not None:
+            app_path_key = (
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\SumatraPDF.exe"
+            )
+            registry_hives = [winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE]
+            for hive in registry_hives:
+                try:
+                    with winreg.OpenKey(hive, app_path_key) as key:
+                        executable, _ = winreg.QueryValueEx(key, None)
+                    if Path(executable).is_file():
+                        return executable
+                except OSError:
+                    continue
+
+        return ""
+
+    def toggle_all_duplex(self):
+        """Apply one duplex setting to all loaded PDF files."""
+        if not self.file_settings:
+            return
+
+        target = self.bulk_duplex_target
+        for settings in self.file_settings.values():
+            settings["duplex"].set(target)
+
+        self.bulk_duplex_target = (
+            "Single-sided" if target == "Double-sided" else "Double-sided"
+        )
+        self.btn_toggle_duplex.config(
+            text=f"Set all {self.bulk_duplex_target.lower()}"
+        )
+        self.log(f"Set all {len(self.file_settings)} files to {target}.")
+
     def browse_folder(self):
         """Open a folder selection dialog and list the PDFs inside."""
         folder_selected = filedialog.askdirectory()
@@ -137,6 +202,10 @@ class PDFPrinterApp:
             child.destroy()
 
         self.file_settings = {}
+        self.bulk_duplex_target = "Double-sided"
+        self.btn_toggle_duplex.config(
+            text="Set all double-sided", state="disabled"
+        )
         folder = Path(folder_path)
         self.pdf_files = sorted(
             [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == ".pdf"],
@@ -194,6 +263,7 @@ class PDFPrinterApp:
                 "copies": copies_var,
             }
 
+        self.btn_toggle_duplex.config(state="normal")
         self.list_container.update_idletasks()
         self._update_canvas_scrollregion()
 
@@ -259,55 +329,8 @@ class PDFPrinterApp:
         self.log_box.see(tk.END)
         self.log_box.config(state="disabled")
 
-    def _update_printer_settings(self, duplex, copies, printer_name):
-        """Try to apply duplex and copies to the selected Windows printer when pywin32 is available."""
-        if win32print is None or win32con is None:
-            self.log("Printer settings were not applied: pywin32 is unavailable.")
-            return
-
-        handle = None
-        try:
-            self.log(f"Opening printer settings for: {printer_name}")
-            handle = win32print.OpenPrinter(printer_name)
-            self.log("Printer handle opened.")
-            printer_info = win32print.GetPrinter(handle, 2)
-            devmode = printer_info["pDevMode"]
-            self.log(
-                "Current driver settings: "
-                f"duplex={getattr(devmode, 'Duplex', 'unknown')}, "
-                f"copies={getattr(devmode, 'Copies', 'unknown')}"
-            )
-
-            if duplex == "Single-sided":
-                devmode.Duplex = win32con.DMDUP_SIMPLEX
-            else:
-                devmode.Duplex = win32con.DMDUP_VERTICAL
-
-            devmode.Copies = int(copies)
-            printer_info["pDevMode"] = devmode
-            self.log(
-                f"Applying printer settings: duplex={duplex}, copies={int(copies)}"
-            )
-            win32print.SetPrinter(handle, 2, printer_info, 0)
-            self.log("Printer settings applied with SetPrinter.")
-        except Exception as exc:
-            self.log(
-                f"Printer setting warning for '{printer_name}' "
-                f"({type(exc).__name__}): {exc}"
-            )
-        finally:
-            if handle is not None:
-                try:
-                    win32print.ClosePrinter(handle)
-                    self.log("Printer handle closed.")
-                except Exception as exc:
-                    self.log(
-                        f"Unable to close printer handle for '{printer_name}' "
-                        f"({type(exc).__name__}): {exc}"
-                    )
-
     def print_pdfs(self):
-        """Print each selected PDF using its own duplex and copy settings."""
+        """Print each selected PDF using SumatraPDF and its per-file settings."""
         self.log("=== Print button clicked ===")
         path_str = self.folder_path.get()
         if not path_str:
@@ -330,11 +353,10 @@ class PDFPrinterApp:
         else:
             self.log("Windows printer APIs are unavailable (pywin32 not installed).")
 
-        printer_choice = selected_printer
-        if selected_printer == "Default Printer":
-            printer_choice = default_printer
-
-        if not printer_choice:
+        printer_choice = (
+            None if selected_printer == "Default Printer" else selected_printer
+        )
+        if selected_printer != "Default Printer" and not printer_choice:
             self.log("Print cancelled: no usable printer was resolved.")
             messagebox.showerror("Error", "Please select a printer first!")
             return
@@ -346,11 +368,29 @@ class PDFPrinterApp:
             )
             return
 
-        self.log(f"Resolved printer for this job: {printer_choice}")
+        sumatra_exe = self._find_sumatra_pdf()
+        if not sumatra_exe:
+            self.log("SumatraPDF executable was not found on this system.")
+            messagebox.showerror(
+                "SumatraPDF Required",
+                "SumatraPDF was not found. Install it, then try printing again.",
+            )
+            return
+
+        if selected_printer == "Default Printer":
+            self.log(
+                f"Resolved printer for this job: {default_printer or 'Windows default'}"
+            )
+            job_printer_label = default_printer or "Windows default"
+        else:
+            self.log(f"Resolved printer for this job: {printer_choice}")
+            job_printer_label = printer_choice
+        self.log(f"PDF print engine: {sumatra_exe}")
         self.log(f"Folder: {path_str}")
         self.log(f"--- Starting print job ({len(self.file_settings)} files) ---")
 
         success_count = 0
+        failure_count = 0
         for pdf_path, settings in self.file_settings.items():
             pdf_file = Path(pdf_path)
             try:
@@ -360,41 +400,69 @@ class PDFPrinterApp:
                 self.log(
                     f"Requested settings: duplex={duplex}, copies={copies_value}"
                 )
-                copies = max(1, int(copies_value))
+                copies = int(copies_value)
+                if not 1 <= copies <= 99:
+                    raise ValueError("Copies must be between 1 and 99.")
+                if duplex not in ("Single-sided", "Double-sided"):
+                    raise ValueError(f"Unsupported duplex option: {duplex}")
                 self.root.update_idletasks()
 
-                self._update_printer_settings(duplex, copies, printer_choice)
-                self.log(
-                    "Submitting Windows shell action: "
-                    f"os.startfile({str(pdf_file)!r}, 'print')"
+                duplex_setting = (
+                    "simplex" if duplex == "Single-sided" else "duplexlong"
                 )
-                self.log(
-                    "The 'print' shell action does not pass the app-selected "
-                    "printer to the PDF handler; the handler may use its own "
-                    "printer selection/default."
+                print_settings = (
+                    f"{copies}x,{duplex_setting},ignore-pdf-print-settings"
                 )
-                os.startfile(str(pdf_file), "print")
+                command = [sumatra_exe]
+                if selected_printer == "Default Printer":
+                    command.append("-print-to-default")
+                else:
+                    command.extend(["-print-to", printer_choice])
+                command.extend(
+                    ["-print-settings", print_settings, str(pdf_file)]
+                )
+                self.log(f"Submitting SumatraPDF command: {command!r}")
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.stdout.strip():
+                    self.log(f"SumatraPDF output: {result.stdout.strip()}")
+                if result.stderr.strip():
+                    self.log(f"SumatraPDF messages: {result.stderr.strip()}")
+                if result.returncode != 0:
+                    raise subprocess.CalledProcessError(
+                        result.returncode,
+                        command,
+                        output=result.stdout,
+                        stderr=result.stderr,
+                    )
                 success_count += 1
                 self.log(
-                    f"Shell print action returned for {pdf_file.name}; "
-                    "this does not confirm that the document reached a printer."
+                    f"SumatraPDF finished printing {pdf_file.name} "
+                    f"(exit code {result.returncode})."
                 )
             except Exception as exc:
+                failure_count += 1
                 self.log(
-                    f"Failed to submit {pdf_file.name} "
+                    f"Failed to print {pdf_file.name} "
                     f"({type(exc).__name__}): {exc}"
                 )
 
         self.log(
-            f"--- Completed: Submitted {success_count} of "
-            f"{len(self.file_settings)} file(s); intended printer was "
-            f"'{printer_choice}' ---"
+            f"--- Completed: {success_count} succeeded, {failure_count} failed; "
+            f"intended printer was "
+            f"'{job_printer_label}' ---"
         )
-        messagebox.showinfo(
-            "Success",
-            f"Submitted {success_count} PDF print request(s). "
-            "Check the System Log for the actual submission details.",
+        summary = (
+            f"Completed {success_count} PDF print job(s); "
+            f"{failure_count} failed. Check the System Log for details."
         )
+        if failure_count:
+            messagebox.showwarning("Printing completed with errors", summary)
+        else:
+            messagebox.showinfo("Printing complete", summary)
 
 
 if __name__ == "__main__":
