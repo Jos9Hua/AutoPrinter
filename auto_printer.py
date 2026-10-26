@@ -71,20 +71,24 @@ class PDFPrinterApp:
         )
         list_title.pack(anchor="w", padx=20)
 
-        self.list_canvas = tk.Canvas(root, height=220, bg="#f5f5f5")
-        self.list_canvas.pack(
-            side="left", fill="both", expand=True, padx=(20, 0), pady=(5, 10)
-        )
+        self.list_frame = tk.Frame(root)
+        self.list_frame.pack(padx=20, pady=(5, 10), fill="both", expand=True)
+
+        self.list_canvas = tk.Canvas(self.list_frame, height=220, bg="#f5f5f5")
+        self.list_canvas.pack(side="left", fill="both", expand=True)
 
         self.list_scrollbar = ttk.Scrollbar(
-            root, orient="vertical", command=self.list_canvas.yview
+            self.list_frame, orient="vertical", command=self.list_canvas.yview
         )
-        self.list_scrollbar.pack(side="right", fill="y", padx=(0, 20), pady=(5, 10))
+        self.list_scrollbar.pack(side="right", fill="y")
         self.list_canvas.configure(yscrollcommand=self.list_scrollbar.set)
 
         self.list_container = tk.Frame(self.list_canvas, bg="#f5f5f5")
-        self.list_canvas.create_window((0, 0), window=self.list_container, anchor="nw")
+        self.list_window = self.list_canvas.create_window(
+            (0, 0), window=self.list_container, anchor="nw"
+        )
         self.list_container.bind("<Configure>", self._update_canvas_scrollregion)
+        self.list_canvas.bind("<Configure>", self._resize_list_container)
 
         self.btn_print = tk.Button(
             root,
@@ -113,6 +117,9 @@ class PDFPrinterApp:
 
     def _update_canvas_scrollregion(self, event=None):
         self.list_canvas.configure(scrollregion=self.list_canvas.bbox("all"))
+
+    def _resize_list_container(self, event):
+        self.list_canvas.itemconfigure(self.list_window, width=event.width)
 
     def browse_folder(self):
         """Open a folder selection dialog and list the PDFs inside."""
@@ -255,12 +262,21 @@ class PDFPrinterApp:
     def _update_printer_settings(self, duplex, copies, printer_name):
         """Try to apply duplex and copies to the selected Windows printer when pywin32 is available."""
         if win32print is None or win32con is None:
+            self.log("Printer settings were not applied: pywin32 is unavailable.")
             return
 
+        handle = None
         try:
+            self.log(f"Opening printer settings for: {printer_name}")
             handle = win32print.OpenPrinter(printer_name)
+            self.log("Printer handle opened.")
             printer_info = win32print.GetPrinter(handle, 2)
             devmode = printer_info["pDevMode"]
+            self.log(
+                "Current driver settings: "
+                f"duplex={getattr(devmode, 'Duplex', 'unknown')}, "
+                f"copies={getattr(devmode, 'Copies', 'unknown')}"
+            )
 
             if duplex == "Single-sided":
                 devmode.Duplex = win32con.DMDUP_SIMPLEX
@@ -269,57 +285,115 @@ class PDFPrinterApp:
 
             devmode.Copies = int(copies)
             printer_info["pDevMode"] = devmode
+            self.log(
+                f"Applying printer settings: duplex={duplex}, copies={int(copies)}"
+            )
             win32print.SetPrinter(handle, 2, printer_info, 0)
-            win32print.ClosePrinter(handle)
+            self.log("Printer settings applied with SetPrinter.")
         except Exception as exc:
-            self.log(f"Printer setting warning for '{printer_name}': {exc}")
+            self.log(
+                f"Printer setting warning for '{printer_name}' "
+                f"({type(exc).__name__}): {exc}"
+            )
+        finally:
+            if handle is not None:
+                try:
+                    win32print.ClosePrinter(handle)
+                    self.log("Printer handle closed.")
+                except Exception as exc:
+                    self.log(
+                        f"Unable to close printer handle for '{printer_name}' "
+                        f"({type(exc).__name__}): {exc}"
+                    )
 
     def print_pdfs(self):
         """Print each selected PDF using its own duplex and copy settings."""
+        self.log("=== Print button clicked ===")
         path_str = self.folder_path.get()
         if not path_str:
+            self.log("Print cancelled: no folder is selected.")
             messagebox.showerror("Error", "Please select a folder first!")
             return
 
-        printer_choice = self.printer_name.get() or "Default Printer"
-        if printer_choice == "Default Printer":
-            printer_choice = win32print.GetDefaultPrinter() if win32print else None
+        selected_printer = self.printer_name.get() or "Default Printer"
+        self.log(f"Printer selected in the app: {selected_printer}")
+        default_printer = None
+        if win32print is not None:
+            try:
+                default_printer = win32print.GetDefaultPrinter()
+                self.log(f"Windows default printer: {default_printer}")
+            except Exception as exc:
+                self.log(
+                    f"Unable to read the Windows default printer "
+                    f"({type(exc).__name__}): {exc}"
+                )
+        else:
+            self.log("Windows printer APIs are unavailable (pywin32 not installed).")
+
+        printer_choice = selected_printer
+        if selected_printer == "Default Printer":
+            printer_choice = default_printer
 
         if not printer_choice:
+            self.log("Print cancelled: no usable printer was resolved.")
             messagebox.showerror("Error", "Please select a printer first!")
             return
 
         if not self.file_settings:
+            self.log(f"Print cancelled: no PDFs are loaded from {path_str}")
             messagebox.showwarning(
                 "No PDFs Found", f"No PDF files were found in:\n{path_str}"
             )
             return
 
-        self.log(f"Selected printer: {printer_choice}")
+        self.log(f"Resolved printer for this job: {printer_choice}")
+        self.log(f"Folder: {path_str}")
         self.log(f"--- Starting print job ({len(self.file_settings)} files) ---")
 
         success_count = 0
         for pdf_path, settings in self.file_settings.items():
             pdf_file = Path(pdf_path)
-            duplex = settings["duplex"].get()
-            copies = max(1, int(settings["copies"].get()))
-
             try:
-                self.log(f"Printing: {pdf_file.name} | {duplex} | Copies: {copies}")
+                duplex = settings["duplex"].get()
+                copies_value = settings["copies"].get()
+                self.log(f"File path: {pdf_file}")
+                self.log(
+                    f"Requested settings: duplex={duplex}, copies={copies_value}"
+                )
+                copies = max(1, int(copies_value))
                 self.root.update_idletasks()
 
                 self._update_printer_settings(duplex, copies, printer_choice)
+                self.log(
+                    "Submitting Windows shell action: "
+                    f"os.startfile({str(pdf_file)!r}, 'print')"
+                )
+                self.log(
+                    "The 'print' shell action does not pass the app-selected "
+                    "printer to the PDF handler; the handler may use its own "
+                    "printer selection/default."
+                )
                 os.startfile(str(pdf_file), "print")
                 success_count += 1
+                self.log(
+                    f"Shell print action returned for {pdf_file.name}; "
+                    "this does not confirm that the document reached a printer."
+                )
             except Exception as exc:
-                self.log(f"Failed to print {pdf_file.name}: {exc}")
+                self.log(
+                    f"Failed to submit {pdf_file.name} "
+                    f"({type(exc).__name__}): {exc}"
+                )
 
         self.log(
-            f"--- Completed: Sent {success_count} file(s) to printer '{printer_choice}' ---"
+            f"--- Completed: Submitted {success_count} of "
+            f"{len(self.file_settings)} file(s); intended printer was "
+            f"'{printer_choice}' ---"
         )
         messagebox.showinfo(
             "Success",
-            f"Successfully sent {success_count} PDF(s) to printer '{printer_choice}'.",
+            f"Submitted {success_count} PDF print request(s). "
+            "Check the System Log for the actual submission details.",
         )
 
 
