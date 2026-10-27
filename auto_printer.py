@@ -28,6 +28,7 @@ class PDFPrinterApp:
         self.pdf_files = []
         self.file_settings = {}
         self.bulk_duplex_target = "Double-sided"
+        self.global_copies = tk.StringVar(value="1")
         self.log_box = None
         self._pending_log_messages = []
 
@@ -85,6 +86,16 @@ class PDFPrinterApp:
             state="disabled",
         )
         self.btn_toggle_duplex.pack(side="right")
+        self.global_copies_combo = ttk.Combobox(
+            list_header,
+            textvariable=self.global_copies,
+            values=[str(copies) for copies in range(1, 100)],
+            state="disabled",
+            width=3,
+        )
+        self.global_copies_combo.pack(side="right", padx=(0, 5))
+        self.global_copies_combo.bind("<<ComboboxSelected>>", self.set_all_copies)
+        tk.Label(list_header, text="Copies for all:").pack(side="right", padx=(10, 5))
 
         self.list_frame = tk.Frame(root)
         self.list_frame.pack(padx=20, pady=(5, 10), fill="both", expand=True)
@@ -181,10 +192,19 @@ class PDFPrinterApp:
         self.bulk_duplex_target = (
             "Single-sided" if target == "Double-sided" else "Double-sided"
         )
-        self.btn_toggle_duplex.config(
-            text=f"Set all {self.bulk_duplex_target.lower()}"
-        )
+        self.btn_toggle_duplex.config(text=f"Set all {self.bulk_duplex_target.lower()}")
         self.log(f"Set all {len(self.file_settings)} files to {target}.")
+
+    def set_all_copies(self, event=None):
+        """Apply the selected number of copies to all loaded PDF files."""
+        if not self.file_settings:
+            return
+
+        copies = int(self.global_copies.get())
+        for settings in self.file_settings.values():
+            settings["copies"].set(copies)
+
+        self.log(f"Set all {len(self.file_settings)} files to {copies} copies.")
 
     def browse_folder(self):
         """Open a folder selection dialog and list the PDFs inside."""
@@ -203,9 +223,9 @@ class PDFPrinterApp:
 
         self.file_settings = {}
         self.bulk_duplex_target = "Double-sided"
-        self.btn_toggle_duplex.config(
-            text="Set all double-sided", state="disabled"
-        )
+        self.global_copies.set("1")
+        self.btn_toggle_duplex.config(text="Set all double-sided", state="disabled")
+        self.global_copies_combo.config(state="disabled")
         folder = Path(folder_path)
         self.pdf_files = sorted(
             [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() == ".pdf"],
@@ -264,6 +284,7 @@ class PDFPrinterApp:
             }
 
         self.btn_toggle_duplex.config(state="normal")
+        self.global_copies_combo.config(state="readonly")
         self.list_container.update_idletasks()
         self._update_canvas_scrollregion()
 
@@ -397,9 +418,7 @@ class PDFPrinterApp:
                 duplex = settings["duplex"].get()
                 copies_value = settings["copies"].get()
                 self.log(f"File path: {pdf_file}")
-                self.log(
-                    f"Requested settings: duplex={duplex}, copies={copies_value}"
-                )
+                self.log(f"Requested settings: duplex={duplex}, copies={copies_value}")
                 copies = int(copies_value)
                 if not 1 <= copies <= 99:
                     raise ValueError("Copies must be between 1 and 99.")
@@ -407,20 +426,14 @@ class PDFPrinterApp:
                     raise ValueError(f"Unsupported duplex option: {duplex}")
                 self.root.update_idletasks()
 
-                duplex_setting = (
-                    "simplex" if duplex == "Single-sided" else "duplexlong"
-                )
-                print_settings = (
-                    f"{copies}x,{duplex_setting},ignore-pdf-print-settings"
-                )
+                duplex_setting = "simplex" if duplex == "Single-sided" else "duplexlong"
+                print_settings = f"{copies}x,{duplex_setting},ignore-pdf-print-settings"
                 command = [sumatra_exe]
                 if selected_printer == "Default Printer":
                     command.append("-print-to-default")
                 else:
                     command.extend(["-print-to", printer_choice])
-                command.extend(
-                    ["-print-settings", print_settings, str(pdf_file)]
-                )
+                command.extend(["-print-settings", print_settings, str(pdf_file)])
                 self.log(f"Submitting SumatraPDF command: {command!r}")
                 result = subprocess.run(
                     command,
@@ -446,8 +459,7 @@ class PDFPrinterApp:
             except Exception as exc:
                 failure_count += 1
                 self.log(
-                    f"Failed to print {pdf_file.name} "
-                    f"({type(exc).__name__}): {exc}"
+                    f"Failed to print {pdf_file.name} " f"({type(exc).__name__}): {exc}"
                 )
 
         self.log(
